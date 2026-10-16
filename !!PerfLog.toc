@@ -1,0 +1,7 @@
+## Interface: 11200
+## Title: |cff33ff99PerfLog|r - performance diagnostics
+## Notes: Logs FPS, frame times, Lua memory, garbage collection, latency and the CPU/memory cost of every addon to CustomData\PerfLog_*.log. Type /perflog for help.
+## Author: Claude for OctoWoW
+## Version: 1.2.0
+## SavedVariables: PerfLogConfig, PerfLogDB
+PerfLog.lua

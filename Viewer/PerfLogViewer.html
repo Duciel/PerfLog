@@ -1,0 +1,864 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PerfLog Viewer</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --surface-2: #f2f1ed;
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781; --grid: #e1e0d9; --line: #d6d5cd;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #6250d6;
+  --band: rgba(235,104,52,0.09);
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b; --info: #2a78d6;
+  --sel: rgba(42,120,214,0.14);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781; --grid: #2c2c2a; --line: #3a3a37;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #9085e9;
+    --band: rgba(217,89,38,0.13); --info: #3987e5; --sel: rgba(57,135,229,0.2);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
+  --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781; --grid: #2c2c2a; --line: #3a3a37;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #9085e9;
+  --band: rgba(217,89,38,0.13); --info: #3987e5; --sel: rgba(57,135,229,0.2);
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 1280px; margin: 0 auto; padding: 20px 16px 60px; }
+h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+h2 { font-size: 16px; margin: 0 0 10px; }
+.sub { color: var(--ink-2); }
+.muted { color: var(--muted); }
+header.top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: space-between; margin-bottom: 16px; }
+button, select, input[type=search] {
+  font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line);
+  border-radius: 8px; padding: 6px 10px; cursor: pointer;
+}
+input[type=search] { cursor: text; min-width: 220px; }
+button:hover { background: var(--surface-2); }
+button.on { border-color: var(--s1); box-shadow: inset 0 0 0 1px var(--s1); }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+#drop { border: 2px dashed var(--line); border-radius: 12px; padding: 40px 20px; text-align: center; background: var(--surface); }
+#drop.hover { border-color: var(--s1); background: var(--sel); }
+#drop code, .card code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+.filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+.filters .grp { display: inline-flex; gap: 0; }
+.filters .grp button { border-radius: 0; margin-left: -1px; }
+.filters .grp button:first-child { border-radius: 8px 0 0 8px; margin-left: 0; }
+.filters .grp button:last-child { border-radius: 0 8px 8px 0; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.kpi .v { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.kpi .l { color: var(--ink-2); font-size: 12.5px; }
+.kpi .d { color: var(--muted); font-size: 12px; }
+.chart { position: relative; margin-bottom: 4px; }
+.chart .ttl { font-size: 12.5px; color: var(--ink-2); margin: 6px 0 2px; }
+.chart svg { display: block; width: 100%; user-select: none; touch-action: none; }
+#tip { position: fixed; pointer-events: none; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; box-shadow: 0 4px 16px rgba(0,0,0,0.15); display: none; z-index: 10; min-width: 170px; }
+#tip .row { display: flex; align-items: center; gap: 8px; }
+#tip .row b { font-variant-numeric: tabular-nums; min-width: 64px; display: inline-block; }
+#tip .key { width: 12px; height: 2px; display: inline-block; }
+.findings { list-style: none; margin: 0; padding: 0; }
+.findings > li { display: grid; grid-template-columns: 112px 1fr; gap: 10px; padding: 10px 0; border-top: 1px solid var(--grid); }
+.findings > li:first-child { border-top: 0; }
+.sev { font-size: 12px; font-weight: 600; display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+.sev i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+.findings .t { font-weight: 600; }
+.findings .x { color: var(--ink-2); margin-top: 2px; }
+.findings .x ul { margin: 4px 0 0; padding-left: 18px; }
+.tblwrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { padding: 6px 8px; border-bottom: 1px solid var(--grid); text-align: right; white-space: nowrap; }
+th { color: var(--ink-2); font-weight: 600; cursor: pointer; position: sticky; top: 0; background: var(--surface); }
+th.l, td.l { text-align: left; }
+td.l { white-space: normal; }
+td { font-variant-numeric: tabular-nums; }
+th.sorted::after { content: " ▾"; }
+th.sorted.asc::after { content: " ▴"; }
+.bar { height: 8px; border-radius: 0 4px 4px 0; background: var(--s1); display: inline-block; vertical-align: middle; }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.small { font-size: 12.5px; }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--surface-2); font-size: 12px; margin: 2px 4px 2px 0; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.grid2 > * { min-width: 0; }
+@media (max-width: 800px) { .grid2 { grid-template-columns: 1fr; } .findings > li { grid-template-columns: 1fr; gap: 2px; } }
+details summary { cursor: pointer; color: var(--ink-2); }
+.hide { display: none !important; }
+.legendline { display: inline-flex; align-items: center; gap: 6px; margin-right: 14px; font-size: 12.5px; color: var(--ink-2); }
+.legendline i { display: inline-block; width: 14px; height: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <header class="top">
+    <div>
+      <h1>PerfLog Viewer</h1>
+      <div class="sub">Performance log analyzer for <b>!!PerfLog</b> (WoW 1.12)</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <select id="sessionSel" class="hide" aria-label="Session"></select>
+      <button id="openBtn">Open a log…</button>
+      <button id="themeBtn" title="Light / dark theme" style="min-width:38px">◐</button>
+      <input id="file" type="file" multiple accept=".log,.txt,.lua" class="hide">
+    </div>
+  </header>
+
+  <div id="drop">
+    <p style="font-size:16px;margin:0 0 8px"><b>Drop one or more log files here</b></p>
+    <p class="sub" style="margin:0 0 6px">Logs are written to <code>&lt;WoW folder&gt;\CustomData\PerfLog_&lt;Character&gt;_&lt;Realm&gt;_&lt;date&gt;_&lt;client&gt;.log</code> — one file per client session, you can drop several at once.</p>
+    <p class="muted small" style="margin:0">Without nampower: <code>WTF\Account\&lt;ACCOUNT&gt;\SavedVariables\!!PerfLog.lua</code> (after a logout or /reload).<br>Everything stays in your browser: nothing is uploaded anywhere.</p>
+  </div>
+
+  <div id="app" class="hide">
+    <div class="card" id="sessionInfo"></div>
+
+    <div class="filters">
+      <span class="grp" id="modeGrp">
+        <button data-mode="all" class="on">Whole session</button>
+        <button data-mode="combat">In combat</button>
+        <button data-mode="nocombat">Out of combat</button>
+      </span>
+      <button id="resetRange" class="hide">✕ Reset zoom</button>
+      <span class="muted small" id="rangeLbl">Tip: drag across a chart to zoom into a time range.</span>
+    </div>
+
+    <div class="kpis" id="kpis"></div>
+
+    <div class="card">
+      <h2>Automatic diagnosis</h2>
+      <ul class="findings" id="findings"></ul>
+    </div>
+
+    <div class="card">
+      <h2>Timeline</h2>
+      <div>
+        <span class="legendline"><i style="background:var(--band)"></i>in combat</span>
+        <span class="legendline"><i style="background:var(--critical);width:3px;height:10px"></i>hitch</span>
+        <span class="legendline"><i style="border-left:1px dashed var(--muted);height:12px;width:1px"></i>marker (zone, loading screen, /perflog mark)</span>
+      </div>
+      <div id="charts"></div>
+    </div>
+
+    <div class="card">
+      <h2>Cost per addon</h2>
+      <p class="sub small" style="margin:-4px 0 10px"><i>Exclusive</i> Lua CPU time of handlers (OnEvent / OnUpdate / OnShow / OnHide) and Lua memory allocated. “ms/s” = milliseconds used per second of play: 10 ms/s = 1% of total time.</p>
+      <div class="tblwrap"><table id="ownerTbl"></table></div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        <h2 style="margin:0">Most expensive handlers</h2>
+        <input type="search" id="hSearch" placeholder="Filter (addon, frame, event)…">
+      </div>
+      <div class="tblwrap" style="max-height:520px;overflow:auto"><table id="handlerTbl"></table></div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h2>Events</h2>
+        <p class="sub small" style="margin:-4px 0 10px">“Dispatch” = number of handler calls triggered (one event × the frames registered for it).</p>
+        <div class="tblwrap" style="max-height:480px;overflow:auto"><table id="eventTbl"></table></div>
+      </div>
+      <div class="card">
+        <h2>Hitches</h2>
+        <div class="tabs">
+          <button id="hSortMs" class="on">Worst first</button>
+          <button id="hSortT">Chronological</button>
+        </div>
+        <div class="tblwrap" style="max-height:480px;overflow:auto"><table id="hitchTbl"></table></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <details>
+        <summary>Recorded configuration (CVars, addons, mods)</summary>
+        <div id="configBox" style="margin-top:10px"></div>
+      </details>
+    </div>
+  </div>
+</main>
+<div id="tip"></div>
+
+<script>
+"use strict";
+// ------------------------------------------------------------------ utilities
+const $ = (s) => document.querySelector(s);
+function el(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  if (attrs) for (const k in attrs) {
+    if (k === "class") e.className = attrs[k];
+    else if (k === "style") e.style.cssText = attrs[k];
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), attrs[k]);
+    else e.setAttribute(k, attrs[k]);
+  }
+  for (const k of kids.flat()) {
+    if (k == null || k === false) continue;
+    e.appendChild(typeof k === "string" || typeof k === "number" ? document.createTextNode(String(k)) : k);
+  }
+  return e;
+}
+const SVGNS = "http://www.w3.org/2000/svg";
+function sv(tag, attrs) { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
+const fmt = (v, d = 0) => (v == null || isNaN(v)) ? "–" : Number(v).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+const fmtKB = (kb) => kb >= 1024 ? fmt(kb / 1024, 1) + " MB" : fmt(kb, 0) + " KB";
+const pct = (v, d = 1) => fmt(v * 100, d) + "%";
+function median(a) { if (!a.length) return NaN; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
+function quantile(a, q) { if (!a.length) return NaN; const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.max(0, Math.floor(q * (s.length - 1))))]; }
+const ownerLabel = (o) => o === "?" ? "(unknown)" : o;
+
+// ------------------------------------------------------------------ parsing
+function unescapeLua(s) {
+  return s.replace(/\\(\r?\n|\d{1,3}|.)/g, (m, c) => {
+    if (c === "n" || c === "\n" || c === "\r\n") return "\n";
+    if (c === "t") return "\t";
+    if (c === "r") return "\r";
+    if (/^\d+$/.test(c)) return String.fromCharCode(parseInt(c, 10));
+    return c;
+  });
+}
+function extractFromSavedVariables(text) {
+  const k = text.indexOf('["chunks"]');
+  if (k < 0) return null;
+  let i = text.indexOf("{", k) + 1, depth = 1;
+  const parts = [];
+  while (i < text.length && depth > 0) {
+    const ch = text[i];
+    if (ch === '"') {
+      let j = i + 1, buf = "";
+      while (j < text.length && text[j] !== '"') { if (text[j] === "\\") { buf += text[j] + text[j + 1]; j += 2; } else { buf += text[j]; j++; } }
+      parts.push(unescapeLua(buf));
+      i = j + 1; continue;
+    }
+    if (ch === "-" && text[i + 1] === "-") { while (i < text.length && text[i] !== "\n") i++; continue; }
+    if (ch === "{") depth++;
+    if (ch === "}") depth--;
+    i++;
+  }
+  return parts.join("");
+}
+
+function parseLog(text, fileName) {
+  let sessionName = fileName;
+  if (/PerfLogDB\s*=/.test(text)) {
+    const m = text.match(/\["session"\]\s*=\s*"([^"]*)"/);
+    if (m) sessionName = m[1] + " (SavedVariables)";
+    text = extractFromSavedVariables(text) || "";
+  }
+  const S = {}, A = [], C = {}, R = {}, T = [], H = [], P = [], E = [], M = [], F = [];
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    if (!line) continue;
+    const f = line.split("\t");
+    switch (f[0]) {
+      case "S": S[f[1]] = f.slice(2).join("\t"); break;
+      case "A": A.push({ name: f[1], enabled: f[2] === "1", loaded: f[3] === "1" }); break;
+      case "C": C[f[1]] = f[2]; break;
+      case "R": R[f[1]] = { id: +f[1], owner: f[2], script: f[3], name: f[4], src: f[5] }; break;
+      case "T": T.push({ t: +f[1], dur: +f[2], frames: +f[3], max: +f[4], n33: +f[5], n50: +f[6], n100: +f[7], lat: +f[8], mem: +f[9], thr: +f[10], alloc: +f[11], gc: +f[12], freed: +f[13], lua: +f[14], self: +f[15], combat: f[16] === "1", loading: f[17] === "1", group: +f[18], children: +f[19] }); break;
+      case "H": H.push({ t: +f[1], ms: +f[2], lua: +f[3], alloc: +f[4], gc: f[5] === "1", freed: +f[6],
+        spikes: f[7] && f[7] !== "-" ? f[7].split(";").map(s => { const p = s.split("|"); return { id: p[0], key: p[1], ms: +p[2] }; }) : [],
+        events: f[8] && f[8] !== "-" ? f[8].split(";").map(s => { const p = s.split("|"); return { ev: p[0], n: +p[1] }; }) : [],
+        combat: f[9] === "1" }); break;
+      case "P": P.push({ t: +f[1], win: +f[2], id: f[3], key: f[4], n: +f[5], ms: +f[6], max: +f[7], kb: +f[8], gc: +f[9] }); break;
+      case "E": E.push({ t: +f[1], win: +f[2], ev: f[3], fires: +f[4], disp: +f[5] }); break;
+      case "M": M.push({ t: +f[1], type: f[2], text: f.slice(3).join("\t") }); break;
+      case "F": F.push({ t: +f[1], ms: +f[2], bytes: +f[3] }); break;
+    }
+  }
+  T.sort((a, b) => a.t - b.t);
+  return { name: sessionName, S, A, C, R, T, H, P, E, M, F };
+}
+
+// ------------------------------------------------------------------ state
+const state = { sessions: [], cur: null, mode: "all", range: null, hitchSort: "ms", hSort: { k: "ms", asc: false }, oSort: { k: "ms", asc: false }, eSort: { k: "disp", asc: false } };
+
+function wallClock(sess, t) {
+  const d = sess.S.date;
+  if (!d) return fmtDur(t);
+  const base = new Date(d.replace(" ", "T"));
+  if (isNaN(base)) return fmtDur(t);
+  const start = sess.T.length ? sess.T[0].t - sess.T[0].dur : 0;
+  const w = new Date(base.getTime() + (t - start) * 1000);
+  return w.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+function fmtDur(s) {
+  s = Math.max(0, Math.round(s));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+  return h ? `${h}h${String(m).padStart(2, "0")}m${String(x).padStart(2, "0")}` : `${m}m${String(x).padStart(2, "0")}s`;
+}
+
+// ------------------------------------------------------------------ filters
+function inRange(t) { return !state.range || (t >= state.range[0] && t <= state.range[1]); }
+function modeOK(combat) { return state.mode === "all" || (state.mode === "combat" ? combat : !combat); }
+
+function filtered(sess) {
+  const T = sess.T.filter(r => !r.loading && inRange(r.t) && modeOK(r.combat));
+  const H = sess.H.filter(r => inRange(r.t) && modeOK(r.combat));
+  // profile windows: classify each window as combat / out of combat from its T seconds
+  const winMap = new Map();
+  for (const p of sess.P) if (!winMap.has(p.t)) winMap.set(p.t, p.win);
+  for (const e of sess.E) if (!winMap.has(e.t)) winMap.set(e.t, e.win);
+  const okWin = new Set(); let winDur = 0;
+  for (const [t, w] of winMap) {
+    if (w <= 0) continue;
+    const t0 = t - w;
+    if (state.range && (t < state.range[0] || t0 > state.range[1])) continue;
+    let c = 0, n = 0;
+    for (const r of sess.T) if (r.t > t0 && r.t <= t) { n++; if (r.combat) c++; }
+    const combat = n ? c / n > 0.5 : false;
+    if (!modeOK(combat)) continue;
+    okWin.add(t); winDur += w;
+  }
+  const P = sess.P.filter(p => okWin.has(p.t));
+  const E = sess.E.filter(e => okWin.has(e.t));
+  return { T, H, P, E, winDur };
+}
+
+// ------------------------------------------------------------------ aggregation
+function aggregate(sess, f) {
+  const R = sess.R;
+  const owners = new Map(), handlers = new Map(), events = new Map();
+  const getO = (o) => { if (!owners.has(o)) owners.set(o, { owner: o, ms: 0, n: 0, kb: 0, gc: 0, max: 0, hitches: 0, hitchMax: 0, handlers: new Set() }); return owners.get(o); };
+  for (const p of f.P) {
+    const r = R[p.id] || { owner: "?", name: "#" + p.id, script: "?" };
+    const o = getO(r.owner);
+    o.ms += p.ms; o.n += p.n; o.kb += p.kb; o.gc += p.gc; if (p.max > o.max) o.max = p.max;
+    const hk = r.owner + "\u0001" + r.name + "\u0001" + p.key;
+    if (!handlers.has(hk)) handlers.set(hk, { owner: r.owner, name: r.name, script: r.script, key: p.key, ms: 0, n: 0, kb: 0, gc: 0, max: 0, ids: new Set() });
+    const h = handlers.get(hk);
+    h.ms += p.ms; h.n += p.n; h.kb += p.kb; h.gc += p.gc; if (p.max > h.max) h.max = p.max; h.ids.add(p.id);
+    o.handlers.add(hk);
+    if (r.script === "OnEvent") {
+      if (!events.has(p.key)) events.set(p.key, { ev: p.key, fires: 0, disp: 0, ms: 0, kb: 0, byOwner: new Map() });
+      const e = events.get(p.key);
+      e.ms += p.ms; e.kb += p.kb;
+      e.byOwner.set(r.owner, (e.byOwner.get(r.owner) || 0) + p.ms);
+    }
+  }
+  for (const x of f.E) {
+    if (!events.has(x.ev)) events.set(x.ev, { ev: x.ev, fires: 0, disp: 0, ms: 0, kb: 0, byOwner: new Map() });
+    const e = events.get(x.ev); e.fires += x.fires; e.disp += x.disp;
+  }
+  // involvement in hitches
+  for (const h of f.H) {
+    const seen = new Set();
+    for (const s of h.spikes) {
+      const r = R[s.id]; const o = r ? r.owner : "?";
+      if (!seen.has(o)) { seen.add(o); const oo = getO(o); oo.hitches++; }
+      const oo = getO(o); if (s.ms > oo.hitchMax) oo.hitchMax = s.ms;
+    }
+  }
+  return { owners: [...owners.values()], handlers: [...handlers.values()], events: [...events.values()] };
+}
+
+function classifyHitch(h, R) {
+  const top = h.spikes[0];
+  if (top && top.ms >= 0.4 * h.ms) {
+    const r = R[top.id];
+    return { cls: "lua1", label: "Lua: " + (r ? ownerLabel(r.owner) : "?"), detail: r ? `${r.name} · ${top.key}` : top.key };
+  }
+  if (h.gc) return { cls: "gc", label: "GC Lua", detail: `${fmtKB(h.freed)} freed` };
+  if (h.lua >= 0.4 * h.ms) return { cls: "luaN", label: "Lua (many handlers)", detail: "" };
+  return { cls: "engine", label: "Not Lua", detail: "rendering / disk / network / engine" };
+}
+
+// ------------------------------------------------------------------ KPIs
+function computeKPIs(sess, f) {
+  const T = f.T;
+  const dur = T.reduce((a, r) => a + r.dur, 0);
+  const frames = T.reduce((a, r) => a + r.frames, 0);
+  const fpsSec = T.filter(r => r.dur > 0.5).map(r => r.frames / r.dur);
+  const lua = T.reduce((a, r) => a + r.lua, 0);
+  const self = T.reduce((a, r) => a + r.self, 0);
+  const gcN = T.reduce((a, r) => a + r.gc, 0);
+  const freed = T.reduce((a, r) => a + r.freed, 0);
+  const alloc = T.reduce((a, r) => a + r.alloc, 0);
+  const n50 = T.reduce((a, r) => a + r.n50, 0);
+  const lat = T.map(r => r.lat).filter(x => x > 0);
+  const mem = T.map(r => r.mem);
+  return {
+    dur, frames, fps: dur ? frames / dur : NaN, fpsLow: quantile(fpsSec, 0.01), fpsP5: quantile(fpsSec, 0.05),
+    luaFrac: dur ? lua / (dur * 1000) : NaN, selfFrac: dur ? self / (dur * 1000) : NaN,
+    gcN, gcFreedAvg: gcN ? freed / gcN : 0, allocRate: dur ? alloc / dur : NaN, n50,
+    hitches: f.H.length, hitchPerMin: dur ? f.H.length / (dur / 60) : NaN,
+    latMed: median(lat), latP95: quantile(lat, 0.95), latMax: lat.length ? Math.max(...lat) : NaN,
+    memAvg: mem.length ? mem.reduce((a, b) => a + b, 0) / mem.length : NaN, memMax: mem.length ? Math.max(...mem) : NaN,
+  };
+}
+
+function renderKPIs(k) {
+  const box = $("#kpis"); box.replaceChildren();
+  const tile = (v, l, d) => el("div", { class: "kpi" }, el("div", { class: "v" }, v), el("div", { class: "l" }, l), d ? el("div", { class: "d" }, d) : null);
+  box.append(
+    tile(fmtDur(k.dur), "Analyzed time", `${fmt(k.frames)} frames`),
+    tile(fmt(k.fps, 1), "Average FPS", `worst 1% of seconds: ${fmt(k.fpsLow, 0)} FPS`),
+    tile(fmt(k.hitches), "Hitches", `${fmt(k.hitchPerMin, 2)} / min · ${fmt(k.n50)} frames > 50 ms`),
+    tile(pct(k.luaFrac), "Lua CPU time (addons)", "share of real time spent in handlers"),
+    tile(fmt(k.memAvg / 1024, 1) + " MB", "Average Lua memory", `max ${fmt(k.memMax / 1024, 1)} MB`),
+    tile(fmt(k.allocRate, 0) + " KB/s", "Lua allocation", `${fmt(k.gcN)} GCs · ${fmtKB(k.gcFreedAvg)} freed on average`),
+    tile(fmt(k.latMed, 0) + " ms", "Median latency", `p95 ${fmt(k.latP95, 0)} ms · max ${fmt(k.latMax, 0)} ms`),
+    tile(pct(k.selfFrac, 2), "PerfLog overhead", "measuring + disk writes"),
+  );
+}
+
+// ------------------------------------------------------------------ diagnostic
+const SEV = {
+  critical: { c: "var(--critical)", l: "Critical" },
+  serious: { c: "var(--serious)", l: "Serious" },
+  warning: { c: "var(--warning)", l: "Watch" },
+  info: { c: "var(--info)", l: "Info" },
+  good: { c: "var(--good)", l: "OK" },
+};
+function diagnose(sess, f, k, agg) {
+  const out = [];
+  const add = (sev, title, ...body) => out.push({ sev, title, body });
+  const R = sess.R, C = sess.C, S = sess.S;
+  const dur = f.winDur || k.dur || 1;
+
+  // 1. hitches by cause
+  if (f.H.length) {
+    const cats = { lua1: [], gc: [], luaN: [], engine: [] };
+    for (const h of f.H) cats[classifyHitch(h, R).cls].push(h);
+    const n = f.H.length;
+    const sevH = k.hitchPerMin > 2 ? "serious" : k.hitchPerMin > 0.5 ? "warning" : "info";
+    const items = [];
+    if (cats.lua1.length) {
+      const by = new Map();
+      for (const h of cats.lua1) {
+        const r = R[h.spikes[0].id]; const key = r ? `${ownerLabel(r.owner)} — ${r.name} · ${h.spikes[0].key}` : h.spikes[0].key;
+        const x = by.get(key) || { n: 0, max: 0 }; x.n++; x.max = Math.max(x.max, h.spikes[0].ms); by.set(key, x);
+      }
+      const top = [...by.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 5);
+      items.push(el("li", null, `${cats.lua1.length} (${pct(cats.lua1.length / n, 0)}) caused by one specific Lua handler:`,
+        el("ul", null, top.map(([kk, v]) => el("li", null, `${kk}: ${v.n} hitch(es), peak ${fmt(v.max, 0)} ms`)))));
+    }
+    if (cats.gc.length) items.push(el("li", null, `${cats.gc.length} (${pct(cats.gc.length / n, 0)}) happened during a Lua garbage collection (GC).`));
+    if (cats.luaN.length) items.push(el("li", null, `${cats.luaN.length} (${pct(cats.luaN.length / n, 0)}) due to many small Lua handlers piling up in the same frame (event burst).`));
+    if (cats.engine.length) items.push(el("li", null, `${cats.engine.length} (${pct(cats.engine.length / n, 0)}) with no Lua cause: rendering, textures/models loaded from disk, network, or files written by a mod (chat log, combat log, addons using WriteCustomFile…).`));
+    add(sevH, `${n} hitches (${fmt(k.hitchPerMin, 2)} per minute) longer than ${S.hitchMs || 60} ms`, el("ul", null, items));
+  } else {
+    add("good", "No hitch recorded in this period", `Threshold: ${S.hitchMs || 60} ms per frame.`);
+  }
+
+  // 2. CPU-hungry addons
+  const owners = agg.owners.filter(o => o.ms > 0).sort((a, b) => b.ms - a.ms);
+  const heavy = owners.filter(o => o.ms / dur >= 10);
+  if (heavy.length) {
+    const worst = heavy[0].ms / dur;
+    add(worst >= 50 ? "critical" : worst >= 25 ? "serious" : "warning",
+      `${heavy.length} addon(s) use more than 1% of CPU time`,
+      el("ul", null, heavy.slice(0, 6).map(o => el("li", null, `${ownerLabel(o.owner)}: ${fmt(o.ms / dur, 1)} ms/s (${pct(o.ms / dur / 1000)} of the time), ${fmt(o.n / dur, 0)} calls/s`))),
+      "Click the addon in the cost table to filter the handlers table and see which script/event costs the most.");
+  } else if (owners.length) {
+    add("good", "No addon uses more than 1% of CPU time", `Most expensive: ${ownerLabel(owners[0].owner)} (${fmt(owners[0].ms / dur, 1)} ms/s).`);
+  }
+
+  // 3. GC / allocations
+  if (k.gcN > 0 || k.allocRate > 0) {
+    const allocOwners = agg.owners.filter(o => o.kb > 0).sort((a, b) => b.kb - a.kb);
+    const totalAttrib = allocOwners.reduce((a, o) => a + o.kb, 0);
+    const gcHitches = f.H.filter(h => h.gc);
+    const pauses = gcHitches.map(h => h.ms);
+    const sev = gcHitches.length >= 5 || k.allocRate > 400 ? "serious" : k.allocRate > 150 || gcHitches.length ? "warning" : "info";
+    const body = [
+      `Average allocation: ${fmt(k.allocRate, 0)} KB/s → one garbage collection roughly every ${k.gcN ? fmtDur(k.dur / k.gcN) : "–"}. A Lua 5.0 collection is “stop-the-world”: it walks the whole Lua memory (${fmt(k.memAvg / 1024, 1)} MB on average), so the bigger the memory, the longer the pause.`,
+    ];
+    if (gcHitches.length) body.push(` ${gcHitches.length} hitch(es) with a GC, median duration ${fmt(median(pauses), 0)} ms.`);
+    if (allocOwners.length) body.push(el("ul", null, allocOwners.slice(0, 5).map(o => el("li", null, `${ownerLabel(o.owner)}: ${fmt(o.kb / dur, 1)} KB/s (${pct(totalAttrib ? o.kb / totalAttrib : 0, 0)} of measured allocations)`))));
+    if (S.weirdutils === "absent" || S.weirdutils === "") body.push("WeirdUtils is not loaded in this session: its performance module replaces the Lua allocator and tunes the GC, which can shorten these pauses.");
+    add(sev, "Lua garbage collection (GC)", ...body);
+  }
+
+  // 4. event floods
+  const evs = agg.events.filter(e => e.fires > 0 || e.disp > 0).map(e => ({ ...e, rate: (e.fires || e.disp) / dur })).sort((a, b) => b.rate - a.rate);
+  const floods = evs.filter(e => e.rate >= 50);
+  if (floods.length) {
+    const guid = C.NP_EnableUnitEventsGuid === "1";
+    const unitFlood = floods.some(e => /^UNIT_/.test(e.ev));
+    add(floods[0].rate >= 300 ? "serious" : "warning", `${floods.length} very frequent event(s) (≥ 50/s)`,
+      el("ul", null, floods.slice(0, 6).map(e => el("li", null, `${e.ev}: ${fmt(e.rate, 0)}/s, ${fmt(e.disp / dur, 0)} handler calls/s, cost ${fmt(e.ms / dur, 1)} ms/s`))),
+      guid && unitFlood ? "NP_EnableUnitEventsGuid = 1: nampower fires UNIT_* events for every tracked GUID, which can flood older addons (pfUI…) in raids." + (C.NP_EnableUnitEventsGuidFiltering === "1" ? " Try /run SetCVar(\"NP_EnableUnitEventsGuid\",\"0\") if your addons do not use the *_GUID events." : " Enable the filtering with /run SetCVar(\"NP_EnableUnitEventsGuidFiltering\",\"1\"), or disable them with /run SetCVar(\"NP_EnableUnitEventsGuid\",\"0\") if your addons do not use the *_GUID events.") : "");
+  }
+
+  // 5. combat vs out of combat
+  const Tall = sess.T.filter(r => !r.loading && inRange(r.t));
+  const fps = (rows) => { const d = rows.reduce((a, r) => a + r.dur, 0); return d ? rows.reduce((a, r) => a + r.frames, 0) / d : NaN; };
+  const luaF = (rows) => { const d = rows.reduce((a, r) => a + r.dur, 0); return d ? rows.reduce((a, r) => a + r.lua, 0) / (d * 1000) : NaN; };
+  const tc = Tall.filter(r => r.combat), tn = Tall.filter(r => !r.combat);
+  if (tc.length >= 20 && tn.length >= 20) {
+    const fc = fps(tc), fn = fps(tn);
+    add(fc < fn * 0.6 ? "warning" : "info", `FPS: ${fmt(fc, 0)} in combat vs ${fmt(fn, 0)} out of combat`,
+      `Lua share: ${pct(luaF(tc))} in combat, ${pct(luaF(tn))} out of combat. ` +
+      (luaF(tc) - luaF(tn) > 0.05 ? "A good part of the extra cost in combat comes from addons (use the “In combat” filter)." : "The extra cost in combat does not come mainly from addons: spell effects, number of units/nameplates shown, rendering."));
+  }
+
+  // 6. rendering / engine
+  if (k.fps < 45 && k.luaFrac < 0.15) {
+    const cv = ["farclip", "spellEffectLevel", "groundEffectDensity", "groundEffectDist", "detailDoodadAlpha", "M2Faster", "gxMultisample", "maxfps"].filter(c => C[c] != null).map(c => `${c}=${C[c]}`);
+    add("warning", "Low FPS while addons only use " + pct(k.luaFrac, 0) + " of the time",
+      "The limit is mostly rendering or the engine (WoW's single-threaded CPU usage, GPU, view distance, effects). " + (cv.length ? "Recorded settings: " + cv.join(", ") + "." : ""));
+  }
+  const maxfps = parseFloat(C.maxfps);
+  if (maxfps > 0 && tn.length && Math.abs(fps(tn) - maxfps) / maxfps < 0.06) add("info", `Out-of-combat FPS is capped by maxfps = ${maxfps}`, "The cap is reached: out-of-combat values do not show the real headroom.")
+  const refresh = parseFloat(C.gxRefresh);
+  if (C.gxVSync === "1" && refresh > 0 && tn.length && fps(tn) <= refresh * 1.03) add("info", `VSync is on: FPS is capped at the refresh rate (${refresh} Hz)`, "With VSync, a frame that misses a refresh waits for the next one, so small slowdowns show as drops to half the refresh rate. Turning VSync off (gxVSync 0) shows the real headroom.");
+
+  // 7. memory drift
+  if (sess.T.length > 600) {
+    const buckets = [];
+    for (let i = 0; i < sess.T.length; i += 60) {
+      const sl = sess.T.slice(i, i + 60).filter(r => !r.loading);
+      if (sl.length) buckets.push({ t: sl[0].t, m: Math.min(...sl.map(r => r.mem)) });
+    }
+    if (buckets.length >= 10) {
+      const n = buckets.length, mx = buckets.reduce((a, b) => a + b.t, 0) / n, my = buckets.reduce((a, b) => a + b.m, 0) / n;
+      let num = 0, den = 0; for (const b of buckets) { num += (b.t - mx) * (b.m - my); den += (b.t - mx) ** 2; }
+      const slope = den ? num / den * 3600 / 1024 : 0; // MB/h
+      if (slope > 15) add(slope > 50 ? "serious" : "warning", `The Lua memory floor grows by ${fmt(slope, 0)} MB/hour`, "An addon keeps accumulating data (cache, history, logs) without releasing it: GCs get longer and longer over the session. Compare the addons' allocation column and check again after a /reload.");
+    }
+  }
+
+  // 8. latency
+  if (k.latP95 > 250) add(k.latP95 > 500 ? "serious" : "warning", `High latency: p95 ${fmt(k.latP95, 0)} ms (median ${fmt(k.latMed, 0)} ms)`, "Network latency does not lower FPS but makes the game feel sluggish (spells, movement). Check your connection, Wi-Fi, or background downloads.");
+
+  // 9. precision / attribution
+  const unknown = agg.owners.find(o => o.owner === "?");
+  const totalMs = agg.owners.reduce((a, o) => a + o.ms, 0);
+  if (unknown && totalMs && unknown.ms / totalMs > 0.15) add("info", `${pct(unknown.ms / totalMs, 0)} of Lua time could not be attributed to an addon`, "These are anonymous frames created outside of loading. Look at the frame names in the handlers table to identify them.");
+  const res = parseFloat(S.clockResMs);
+  if (S.clock === "GetTime" || res >= 1) add("info", `Timing clock: ${S.clock || "?"} (resolution ${fmt(res, 3)} ms)`, "Single-call durations are rounded, but totals over a session remain statistically reliable.");
+  if (k.selfFrac > 0.02) add("warning", `PerfLog itself uses ${pct(k.selfFrac, 1)} of the time`, "For lighter measuring: /perflog profile off (keeps FPS, hitches, memory, GC).");
+  if (S.profile === "0") add("info", "Handler profiling was off in this session", "The addon/handler tables are empty. Turn it back on with /perflog profile on.");
+
+  const order = { critical: 0, serious: 1, warning: 2, info: 3, good: 4 };
+  out.sort((a, b) => order[a.sev] - order[b.sev]);
+  return out;
+}
+function renderFindings(list) {
+  const ul = $("#findings"); ul.replaceChildren();
+  for (const f of list) {
+    const s = SEV[f.sev];
+    ul.append(el("li", null,
+      el("div", null, el("span", { class: "sev" }, el("i", { style: `background:${s.c}` }), s.l)),
+      el("div", null, el("div", { class: "t" }, f.title), el("div", { class: "x" }, ...f.body.filter(Boolean).map(b => typeof b === "string" ? el("span", null, b) : b)))));
+  }
+}
+
+// ------------------------------------------------------------------ charts
+const chartDefs = [
+  { key: "fps", title: "FPS (average per second)", color: "var(--s1)", get: r => r.dur ? r.frames / r.dur : 0, fmt: v => fmt(v, 0) + " FPS" },
+  { key: "max", title: "Worst frame of each second (ms)", color: "var(--s4)", get: r => r.max, fmt: v => fmt(v, 0) + " ms", log: false },
+  { key: "lua", title: "Handler Lua CPU time (ms per second)", color: "var(--s2)", get: r => r.dur ? r.lua / r.dur : 0, fmt: v => fmt(v, 1) + " ms/s" },
+  { key: "mem", title: "Lua memory (MB) — dots: garbage collection", color: "var(--s3)", get: r => r.mem / 1024, fmt: v => fmt(v, 1) + " MB" },
+  { key: "lat", title: "Latency (ms)", color: "var(--s1)", get: r => r.lat, fmt: v => fmt(v, 0) + " ms" },
+];
+const charts = [];
+let dragging = null;
+
+function renderCharts(sess) {
+  const box = $("#charts"); box.replaceChildren(); charts.length = 0;
+  const T = sess.T;
+  if (!T.length) { box.append(el("p", { class: "muted" }, "No timeline data.")); return; }
+  const x0 = state.range ? state.range[0] : T[0].t - T[0].dur;
+  const x1 = state.range ? state.range[1] : T[T.length - 1].t;
+  const rows = T.filter(r => r.t >= x0 && r.t <= x1);
+  const W = Math.max(320, box.clientWidth || 900), padL = 52, padR = 12, padT = 6, padB = 18;
+  const X = (t) => padL + (t - x0) / Math.max(1e-9, x1 - x0) * (W - padL - padR);
+  // combat bands
+  const bands = []; let bs = null;
+  for (const r of rows) { if (r.combat && bs == null) bs = r.t - r.dur; if (!r.combat && bs != null) { bands.push([bs, r.t - r.dur]); bs = null; } }
+  if (bs != null) bands.push([bs, rows[rows.length - 1].t]);
+  const marks = sess.M.filter(m => m.t >= x0 && m.t <= x1 && ["zone", "user", "loading_start", "loading_end", "group", "logout", "profile", "user_gc"].includes(m.type));
+  const hitches = sess.H.filter(h => h.t >= x0 && h.t <= x1);
+
+  chartDefs.forEach((def, ci) => {
+    const H = ci === 0 ? 150 : 96;
+    const vals = rows.map(def.get);
+    let vmax = Math.max(1, ...vals.filter(v => isFinite(v)));
+    if (def.key === "max") vmax = Math.min(vmax, Math.max(200, quantile(vals, 0.995) * 1.2));
+    vmax = niceMax(vmax);
+    const Y = (v) => padT + (1 - Math.min(v, vmax) / vmax) * (H - padT - padB);
+    const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, height: H, role: "img", "aria-label": def.title });
+    for (const [a, b] of bands) svg.append(sv("rect", { x: X(a), y: padT, width: Math.max(1, X(b) - X(a)), height: H - padT - padB, fill: "var(--band)" }));
+    // grid
+    for (let i = 0; i <= 2; i++) {
+      const v = vmax * i / 2, y = Y(v);
+      svg.append(sv("line", { x1: padL, x2: W - padR, y1: y, y2: y, stroke: "var(--grid)", "stroke-width": 1 }));
+      const tx = sv("text", { x: padL - 6, y: y + 4, "text-anchor": "end", "font-size": 11, fill: "var(--muted)" }); tx.textContent = fmt(v, v < 10 && vmax < 10 ? 1 : 0); svg.append(tx);
+    }
+    // X axis (time) on the first and last charts
+    if (ci === chartDefs.length - 1 || ci === 0) {
+      const nT = Math.max(2, Math.floor((W - padL) / 110));
+      for (let i = 0; i <= nT; i++) {
+        const t = x0 + (x1 - x0) * i / nT;
+        const tx = sv("text", { x: X(t), y: H - 4, "text-anchor": i === 0 ? "start" : i === nT ? "end" : "middle", "font-size": 11, fill: "var(--muted)" });
+        tx.textContent = wallClock(sess, t); svg.append(tx);
+      }
+    }
+    // markers
+    for (const m of marks) {
+      const x = X(m.t);
+      svg.append(sv("line", { x1: x, x2: x, y1: padT, y2: H - padB, stroke: "var(--muted)", "stroke-dasharray": "3 3", "stroke-width": 1 }));
+      if (ci === 0) {
+        const tx = sv("text", { x: x + 3, y: padT + 10, "font-size": 10.5, fill: "var(--ink-2)" });
+        tx.textContent = markLabel(m); svg.append(tx);
+      }
+    }
+    // series
+    let d = ""; let prevT = null;
+    rows.forEach((r, i) => { const v = def.get(r); const gap = prevT != null && r.t - prevT > 3; d += (i === 0 || gap ? "M" : "L") + X(r.t).toFixed(1) + "," + Y(v).toFixed(1); prevT = r.t; });
+    svg.append(sv("path", { d, fill: "none", stroke: def.color, "stroke-width": 1.6, "stroke-linejoin": "round" }));
+    if (def.key === "mem") for (const r of rows) if (r.gc > 0) svg.append(sv("circle", { cx: X(r.t), cy: Y(def.get(r)), r: 2.5, fill: def.color, stroke: "var(--surface)", "stroke-width": 1 }));
+    if (ci === 0 || def.key === "max") for (const h of hitches) {
+      const x = X(h.t);
+      svg.append(sv("line", { x1: x, x2: x, y1: H - padB - 7, y2: H - padB, stroke: "var(--critical)", "stroke-width": 2 }));
+    }
+    // interactive layers
+    const sel = sv("rect", { x: 0, y: padT, width: 0, height: H - padT - padB, fill: "var(--sel)", visibility: "hidden" });
+    const cross = sv("line", { x1: 0, x2: 0, y1: padT, y2: H - padB, stroke: "var(--ink-2)", "stroke-width": 1, visibility: "hidden" });
+    const dot = sv("circle", { r: 3.5, fill: def.color, stroke: "var(--surface)", "stroke-width": 2, visibility: "hidden" });
+    svg.append(sel, cross, dot);
+    const hit = sv("rect", { x: padL, y: 0, width: W - padL - padR, height: H, fill: "transparent", style: "cursor:crosshair" });
+    svg.append(hit);
+    const wrap = el("div", { class: "chart" }, el("div", { class: "ttl" }, def.title));
+    wrap.append(svg); box.append(wrap);
+    const c = { svg, def, X, Y, W, H, padL, padR, sel, cross, dot, rows, x0, x1 };
+    charts.push(c);
+    const toT = (ev) => { const rc = svg.getBoundingClientRect(); const px = (ev.clientX - rc.left) * (W / rc.width); return x0 + (Math.min(Math.max(px, padL), W - padR) - padL) / (W - padL - padR) * (x1 - x0); };
+    hit.addEventListener("pointermove", (ev) => {
+      const t = toT(ev);
+      showCross(sess, t, ev);
+      if (dragging) { dragging.t1 = t; for (const cc of charts) { const a = cc.X(Math.min(dragging.t0, t)), b = cc.X(Math.max(dragging.t0, t)); cc.sel.setAttribute("x", a); cc.sel.setAttribute("width", Math.max(0, b - a)); cc.sel.setAttribute("visibility", "visible"); } }
+    });
+    hit.addEventListener("pointerleave", () => { if (!dragging) hideCross(); });
+    hit.addEventListener("pointerdown", (ev) => { hit.setPointerCapture(ev.pointerId); dragging = { t0: toT(ev), t1: toT(ev) }; });
+    hit.addEventListener("pointerup", () => {
+      const d = dragging; dragging = null;
+      for (const cc of charts) cc.sel.setAttribute("visibility", "hidden");
+      if (d && Math.abs(d.t1 - d.t0) > (x1 - x0) / 200 && Math.abs(d.t1 - d.t0) >= 3) { state.range = [Math.min(d.t0, d.t1), Math.max(d.t0, d.t1)]; renderAll(); }
+    });
+  });
+}
+function niceMax(v) { const p = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p; return v; }
+function markLabel(m) {
+  switch (m.type) {
+    case "zone": return m.text; case "user": return "✎ " + m.text; case "loading_start": return "loading…";
+    case "loading_end": return "loaded (" + m.text + ")"; case "group": return "group: " + m.text; case "logout": return "logout";
+    default: return m.type + " " + m.text;
+  }
+}
+function nearestRow(rows, t) {
+  let lo = 0, hi = rows.length - 1;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (rows[mid].t < t) lo = mid; else hi = mid; }
+  return Math.abs(rows[lo].t - t) <= Math.abs(rows[hi].t - t) ? rows[lo] : rows[hi];
+}
+function showCross(sess, t, ev) {
+  if (!charts.length || !charts[0].rows.length) return;
+  const r = nearestRow(charts[0].rows, t);
+  for (const c of charts) {
+    const x = c.X(r.t);
+    c.cross.setAttribute("x1", x); c.cross.setAttribute("x2", x); c.cross.setAttribute("visibility", "visible");
+    c.dot.setAttribute("cx", x); c.dot.setAttribute("cy", c.Y(c.def.get(r))); c.dot.setAttribute("visibility", "visible");
+  }
+  const tip = $("#tip"); tip.replaceChildren();
+  tip.append(el("div", { style: "margin-bottom:4px;color:var(--ink-2)" }, wallClock(sess, r.t) + (r.combat ? " · in combat" : "") + (r.group > 1 ? ` · group ${r.group}` : "")));
+  for (const c of charts) tip.append(el("div", { class: "row" }, el("i", { class: "key", style: `background:${c.def.color}` }), el("b", null, c.def.fmt(c.def.get(r))), el("span", { class: "muted" }, c.def.key === "max" ? "worst frame" : c.def.key === "lua" ? "Lua" : c.def.key === "mem" ? "memory" : c.def.key === "lat" ? "latency" : "FPS")));
+  const hs = sess.H.filter(h => Math.abs(h.t - r.t) <= 0.6);
+  for (const h of hs.slice(0, 2)) { const c = classifyHitch(h, sess.R); tip.append(el("div", { style: "margin-top:4px;color:var(--critical)" }, `Hitch ${fmt(h.ms, 0)} ms — ${c.label}`)); }
+  tip.style.display = "block";
+  const w = tip.offsetWidth, hgt = tip.offsetHeight;
+  let x = ev.clientX + 14, y = ev.clientY + 14;
+  if (x + w > innerWidth - 8) x = ev.clientX - w - 14;
+  if (y + hgt > innerHeight - 8) y = ev.clientY - hgt - 14;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+function hideCross() { for (const c of charts) { c.cross.setAttribute("visibility", "hidden"); c.dot.setAttribute("visibility", "hidden"); } $("#tip").style.display = "none"; }
+
+// ------------------------------------------------------------------ tables
+function sortableTable(tbl, cols, rows, sortState, onSort) {
+  const k = sortState.k;
+  rows.sort((a, b) => { const va = cols.find(c => c.k === k).v(a), vb = cols.find(c => c.k === k).v(b); const r = typeof va === "string" ? va.localeCompare(vb) : va - vb; return sortState.asc ? r : -r; });
+  const thead = el("thead", null, el("tr", null, cols.map(c => {
+    const th = el("th", { class: (c.l ? "l " : "") + (c.k === k ? "sorted" + (sortState.asc ? " asc" : "") : ""), title: c.tip || "" }, c.h);
+    th.addEventListener("click", () => { if (sortState.k === c.k) sortState.asc = !sortState.asc; else { sortState.k = c.k; sortState.asc = !!c.l; } onSort(); });
+    return th;
+  })));
+  const tbody = el("tbody");
+  for (const r of rows) tbody.append(el("tr", null, cols.map(c => { const v = c.r ? c.r(r) : c.f ? c.f(c.v(r)) : c.v(r); return el("td", { class: c.l ? "l" : "" }, v); })));
+  tbl.replaceChildren(thead, tbody);
+}
+
+function renderOwners(sess, f, agg) {
+  const dur = f.winDur || 1;
+  const rows = agg.owners.filter(o => o.ms > 0 || o.kb > 0 || o.hitches > 0);
+  const maxMs = Math.max(1e-9, ...rows.map(o => o.ms));
+  const cols = [
+    { k: "owner", h: "Addon", l: true, v: o => ownerLabel(o.owner) },
+    { k: "ms", h: "CPU (ms/s)", v: o => o.ms / dur, r: o => el("span", null, el("span", { class: "bar", style: `width:${Math.max(1, 70 * o.ms / maxMs)}px;margin-right:8px` }), fmt(o.ms / dur, 2)), tip: "Milliseconds of Lua CPU per second of play" },
+    { k: "pct", h: "% of time", v: o => o.ms / dur / 1000, f: v => pct(v, 2) },
+    { k: "n", h: "Calls/s", v: o => o.n / dur, f: v => fmt(v, 0) },
+    { k: "avg", h: "µs/call", v: o => o.n ? o.ms * 1000 / o.n : 0, f: v => fmt(v, 0) },
+    { k: "max", h: "Worst call", v: o => o.max, f: v => fmt(v, 1) + " ms" },
+    { k: "kb", h: "Alloc (KB/s)", v: o => o.kb / dur, f: v => fmt(v, 1), tip: "Lua memory allocated per second: this is what triggers the GC" },
+    { k: "gc", h: "GCs triggered", v: o => o.gc, f: v => fmt(v), tip: "Number of calls during which a collection happened" },
+    { k: "hitches", h: "Hitches involved", v: o => o.hitches, f: v => fmt(v) },
+    { k: "nh", h: "Handlers", v: o => o.handlers.size, f: v => fmt(v) },
+  ];
+  sortableTable($("#ownerTbl"), cols, rows, state.oSort, () => renderOwners(sess, f, agg));
+  $("#ownerTbl").querySelectorAll("tbody tr").forEach((tr, i) => {
+    tr.style.cursor = "pointer"; tr.title = "Filter the handlers table on this addon";
+    tr.addEventListener("click", () => { $("#hSearch").value = tr.firstChild.textContent; renderHandlers(sess, f, agg); $("#hSearch").scrollIntoView({ behavior: "smooth", block: "center" }); });
+  });
+}
+
+function renderHandlers(sess, f, agg) {
+  const dur = f.winDur || 1;
+  const q = $("#hSearch").value.trim().toLowerCase();
+  let rows = agg.handlers.filter(h => !q || (ownerLabel(h.owner) + " " + h.name + " " + h.key).toLowerCase().includes(q));
+  rows = rows.sort((a, b) => b.ms - a.ms).slice(0, q ? 2000 : 400);
+  const cols = [
+    { k: "owner", h: "Addon", l: true, v: h => ownerLabel(h.owner) },
+    { k: "name", h: "Frame", l: true, v: h => h.name },
+    { k: "key", h: "Script / event", l: true, v: h => h.key },
+    { k: "ms", h: "ms/s", v: h => h.ms / dur, f: v => fmt(v, 2) },
+    { k: "n", h: "Calls/s", v: h => h.n / dur, f: v => fmt(v, 1) },
+    { k: "avg", h: "µs/call", v: h => h.n ? h.ms * 1000 / h.n : 0, f: v => fmt(v, 0) },
+    { k: "max", h: "Worst", v: h => h.max, f: v => fmt(v, 1) + " ms" },
+    { k: "kb", h: "KB/s", v: h => h.kb / dur, f: v => fmt(v, 2) },
+    { k: "kbc", h: "Bytes/call", v: h => h.n ? h.kb * 1024 / h.n : 0, f: v => fmt(v, 0) },
+    { k: "gc", h: "GC", v: h => h.gc, f: v => fmt(v) },
+  ];
+  sortableTable($("#handlerTbl"), cols, rows, state.hSort, () => renderHandlers(sess, f, agg));
+}
+
+function renderEvents(sess, f, agg) {
+  const dur = f.winDur || 1;
+  const rows = agg.events.filter(e => e.fires > 0 || e.disp > 0 || e.ms > 0);
+  const cols = [
+    { k: "ev", h: "Event", l: true, v: e => e.ev },
+    { k: "fires", h: "/s", v: e => e.fires / dur, f: v => fmt(v, 1), tip: "Occurrences per second" },
+    { k: "disp", h: "Dispatch/s", v: e => e.disp / dur, f: v => fmt(v, 1) },
+    { k: "ms", h: "Cost ms/s", v: e => e.ms / dur, f: v => fmt(v, 2) },
+    { k: "top", h: "Most expensive addon", l: true, v: e => { let b = "", m = -1; for (const [o, ms] of e.byOwner) if (ms > m) { m = ms; b = o; } return m > 0 ? ownerLabel(b) : ""; } },
+  ];
+  sortableTable($("#eventTbl"), cols, rows, state.eSort, () => renderEvents(sess, f, agg));
+}
+
+function renderHitches(sess, f) {
+  let rows = [...f.H];
+  if (state.hitchSort === "ms") rows.sort((a, b) => b.ms - a.ms); else rows.sort((a, b) => a.t - b.t);
+  rows = rows.slice(0, 500);
+  const tbl = $("#hitchTbl");
+  const thead = el("thead", null, el("tr", null, el("th", { class: "l" }, "Time"), el("th", null, "Frame"), el("th", null, "Lua"), el("th", { class: "l" }, "Likely cause"), el("th", { class: "l" }, "Events")));
+  const tbody = el("tbody");
+  for (const h of rows) {
+    const c = classifyHitch(h, sess.R);
+    const others = h.spikes.slice(c.cls === "lua1" ? 1 : 0, 3).map(s => { const r = sess.R[s.id]; return `${r ? ownerLabel(r.owner) : "?"} ${fmt(s.ms, 0)} ms`; });
+    const tr = el("tr", null,
+      el("td", { class: "l" }, wallClock(sess, h.t), h.combat ? el("span", { class: "muted" }, " ⚔") : null),
+      el("td", null, fmt(h.ms, 0) + " ms"),
+      el("td", null, fmt(h.lua, 0) + " ms"),
+      el("td", { class: "l" }, el("b", null, c.label), c.detail ? el("div", { class: "muted small" }, c.detail) : null, others.length ? el("div", { class: "muted small" }, "also: " + others.join(", ")) : null, h.gc && c.cls !== "gc" ? el("div", { class: "muted small" }, `+ GC (${fmtKB(h.freed)})`) : null),
+      el("td", { class: "l small" }, h.events.slice(0, 3).map(e => `${e.ev}×${e.n}`).join(", ")));
+    tr.style.cursor = "pointer"; tr.title = "Zoom on this moment";
+    tr.addEventListener("click", () => { state.range = [h.t - 20, h.t + 20]; renderAll(); $("#charts").scrollIntoView({ behavior: "smooth", block: "start" }); });
+    tbody.append(tr);
+  }
+  if (!rows.length) tbody.append(el("tr", null, el("td", { class: "l muted", colspan: 5 }, "No hitch in this period.")));
+  tbl.replaceChildren(thead, tbody);
+}
+
+function renderSessionInfo(sess) {
+  const S = sess.S;
+  const box = $("#sessionInfo"); box.replaceChildren();
+  const T = sess.T; const total = T.length ? T[T.length - 1].t : 0;
+  box.append(
+    el("div", { style: "display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px" },
+      el("div", null, el("b", null, (sess.S.char ? sess.S.char + " @ " + (sess.S.realm || "?") + " — " : "") + sess.name), el("div", { class: "sub small" }, `${S.date || "?"} · ${S.char || "?"} @ ${S.realm || "?"} · duration ${fmtDur(total)} · ${S.build || ""}`)),
+      el("div", { class: "small muted" }, `PerfLog ${S.addonVersion || "?"} · clock ${S.clock || "?"} · ${S.handlersWrapped || "?"} handlers instrumented`)),
+    el("div", { style: "margin-top:8px" },
+      ["superwow", "nampower", "classicapi", "weirdutils", "unitxp"].map(k => el("span", { class: "pill" }, `${k} : ${S[k] || "?"}`)),
+      el("span", { class: "pill" }, `${sess.A.filter(a => a.loaded).length} addons loaded`)));
+}
+
+function renderConfig(sess) {
+  const box = $("#configBox"); box.replaceChildren();
+  const cv = Object.entries(sess.C);
+  box.append(el("div", { class: "grid2" },
+    el("div", null, el("h2", null, "CVars"), el("table", null, el("tbody", null, cv.map(([k, v]) => el("tr", null, el("td", { class: "l" }, k), el("td", null, v)))))),
+    el("div", null, el("h2", null, "Addons"), el("div", null, sess.A.map(a => el("span", { class: "pill", style: a.loaded ? "" : "opacity:.5" }, a.name + (a.loaded ? "" : " (not loaded)")))),
+      el("h2", { style: "margin-top:14px" }, "Session"), el("table", null, el("tbody", null, Object.entries(sess.S).map(([k, v]) => el("tr", null, el("td", { class: "l" }, k), el("td", { class: "l" }, v))))))));
+}
+
+// ------------------------------------------------------------------ global render
+function renderAll() {
+  const sess = state.cur; if (!sess) return;
+  const f = filtered(sess);
+  const k = computeKPIs(sess, f);
+  const agg = aggregate(sess, f);
+  renderSessionInfo(sess);
+  renderKPIs(k);
+  renderFindings(diagnose(sess, f, k, agg));
+  renderCharts(sess);
+  renderOwners(sess, f, agg);
+  renderHandlers(sess, f, agg);
+  renderEvents(sess, f, agg);
+  renderHitches(sess, f);
+  renderConfig(sess);
+  $("#resetRange").classList.toggle("hide", !state.range);
+  $("#rangeLbl").textContent = state.range ? `Range: ${wallClock(sess, state.range[0])} → ${wallClock(sess, state.range[1])} (${fmtDur(state.range[1] - state.range[0])})` : "Tip: drag across a chart to zoom into a time range.";
+  state._f = f; state._agg = agg;
+}
+
+// ------------------------------------------------------------------ file loading
+async function loadFiles(files) {
+  for (const file of files) {
+    const text = await file.text();
+    const sess = parseLog(text, file.name);
+    if (!sess.T.length && !sess.P.length) { alert(`“${file.name}” does not contain PerfLog data.`); continue; }
+    state.sessions.push(sess);
+  }
+  if (!state.sessions.length) return;
+  const sel = $("#sessionSel"); sel.replaceChildren();
+  state.sessions.forEach((s, i) => sel.append(el("option", { value: i }, s.S.char ? `${s.S.char} @ ${s.S.realm || "?"} — ${s.S.date || ""}${s.S.clientId ? " (client " + s.S.clientId + ")" : ""}` : s.name)));
+  sel.classList.toggle("hide", state.sessions.length < 2);
+  sel.value = state.sessions.length - 1;
+  selectSession(state.sessions.length - 1);
+}
+function selectSession(i) {
+  state.cur = state.sessions[i]; state.range = null;
+  $("#drop").classList.add("hide"); $("#app").classList.remove("hide");
+  renderAll();
+}
+
+$("#openBtn").addEventListener("click", () => $("#file").click());
+$("#file").addEventListener("change", (e) => loadFiles([...e.target.files]));
+$("#sessionSel").addEventListener("change", (e) => selectSession(+e.target.value));
+const drop = $("#drop");
+for (const t of ["dragenter", "dragover"]) document.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("hover"); });
+for (const t of ["dragleave", "drop"]) document.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("hover"); });
+document.addEventListener("drop", (e) => { if (e.dataTransfer.files.length) loadFiles([...e.dataTransfer.files]); });
+$("#modeGrp").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; state.mode = b.dataset.mode; $("#modeGrp").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b)); renderAll(); });
+$("#resetRange").addEventListener("click", () => { state.range = null; renderAll(); });
+$("#hSearch").addEventListener("input", () => renderHandlers(state.cur, state._f, state._agg));
+$("#hSortMs").addEventListener("click", () => { state.hitchSort = "ms"; $("#hSortMs").classList.add("on"); $("#hSortT").classList.remove("on"); renderHitches(state.cur, state._f); });
+$("#hSortT").addEventListener("click", () => { state.hitchSort = "t"; $("#hSortT").classList.add("on"); $("#hSortMs").classList.remove("on"); renderHitches(state.cur, state._f); });
+$("#themeBtn").addEventListener("click", () => {
+  const cur = document.documentElement.getAttribute("data-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const next = cur === "dark" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", next);
+  try { localStorage.setItem("perflog-theme", next); } catch (e) {}
+});
+try { const th = localStorage.getItem("perflog-theme"); if (th) document.documentElement.setAttribute("data-theme", th); } catch (e) {}
+let rz; addEventListener("resize", () => { clearTimeout(rz); rz = setTimeout(() => state.cur && renderCharts(state.cur), 150); });
+</script>
+</body>
+</html>
