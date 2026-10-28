@@ -18,16 +18,23 @@
     A  addon enabled loaded           addon list
     C  cvar value                     graphics / nampower cvars
     R  id owner script name source    declaration of a profiled handler
-    T  t dur frames maxMs n33 n50 n100 lat memKB thrKB allocKB gc freedKB luaMs selfMs combat loading group children
+    T  t dur frames maxMs n33 n50 n100 lat memKB thrKB allocKB gc freedKB luaMs selfMs combat loading group children bgSec
     H  t frameMs luaMs allocKB gc freedKB spikes events combat
     P  t window id key calls ms maxMs allocKB gc
     E  t window event fires dispatches
-    M  t type text                    markers (combat, zone, loading screens, /perflog mark)
+    M  t type text                    markers (combat, zone, loading screens, background, /perflog mark)
     F  t ms bytes                     cost of one disk write
+
+  Background window: when WoW is not the active window it throttles itself to
+  a fixed low frame rate (about 4 FPS here, i.e. ~260 ms frames). Those frames
+  are not hitches. A run of bgRun frames that are all >= bgMinMs, within bgTol
+  of each other and with almost no Lua time is treated as "background": the
+  hitches of the run are dropped, a bg_start / bg_end marker is written, and
+  the T line gets the number of seconds spent in background (bgSec).
 ]]
 
 local ADDON_NAME = "!!PerfLog"
-local VERSION = "1.2.0"
+local VERSION = "1.3.0"
 
 local GetTime, gcinfo, pairs, type, tostring, pcall = GetTime, gcinfo, pairs, type, tostring, pcall
 local format, gsub, sfind = string.format, string.gsub, string.find
@@ -47,6 +54,9 @@ local DEFAULTS = {
   scanBatch = 100,    -- max frames inspected per rendered frame
   scanBudgetMs = 1,   -- max scanner time per rendered frame (ms)
   rescan    = 20,     -- seconds between two full scanner passes
+  bgMinMs   = 150,    -- background: frames at least this long...
+  bgRun     = 3,      -- ...this many in a row...
+  bgTol     = 0.15,   -- ...each within 15% of the previous one
 }
 local cfg = {}
 for k, v in pairs(DEFAULTS) do cfg[k] = v end
@@ -613,6 +623,7 @@ local function WriteSessionInfo()
   S("unitxp", type(UnitXP) == "function" and "present" or "absent")
   S("hitchMs", cfg.hitchMs)
   S("window", cfg.window)
+  S("bgDetect", format("%d frames >= %d ms within %d%%", cfg.bgRun, cfg.bgMinMs, cfg.bgTol * 100))
   S("profile", PROF and 1 or 0)
   -- addons
   local n = GetNumAddOns()
@@ -641,7 +652,12 @@ OURS[driver] = true
 local lastMem = gcinfo()
 -- counters of the current second (in a table: Lua 5.0 has a 32 upvalue limit)
 local tk = { acc = 0, frames = 0, max = 0, n33 = 0, n50 = 0, n100 = 0,
-             alloc = 0, gc = 0, freed = 0, lua = 0, self = 0 }
+             alloc = 0, gc = 0, freed = 0, lua = 0, self = 0, bg = 0 }
+-- background (throttled window) detection
+--   on: in background; run/runMs/ref: current run of long regular frames;
+--   pend: hitch lines of the current run, written only if the run is not background
+local bgs = { on = false, run = 0, runMs = 0, ref = 0, pend = {}, npend = 0,
+              since = 0, frames = 0, periods = 0, skipped = 0, total = 0 }
 -- general state
 local st = { nextFlushAt = 0, nextWindowAt = 0, loading = true, loadingUntil = 0,
              loadStart = GetTime(), inCombat = false, groupSize = 1, hitchCount = 0,
@@ -689,12 +705,67 @@ local function EmitTick(now, mem, thr)
   local _, _, lat = GetNetStats()
   local children = 0
   if st.childrenOK then children = WorldFrame:GetNumChildren() or 0 end
-  W(format("T\t%.3f\t%.3f\t%d\t%.1f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%.2f\t%.2f\t%d\t%d\t%d\t%d",
+  W(format("T\t%.3f\t%.3f\t%d\t%.1f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%.2f\t%.2f\t%d\t%d\t%d\t%d\t%.3f",
     now - T0, tk.acc, tk.frames, tk.max, tk.n33, tk.n50, tk.n100, lat or 0, mem, thr or 0,
     tk.alloc, tk.gc, tk.freed, tk.lua, tk.self, st.inCombat and 1 or 0, st.loading and 1 or 0,
-    st.groupSize, children))
+    st.groupSize, children, tk.bg))
   tk.acc, tk.frames, tk.max, tk.n33, tk.n50, tk.n100 = 0, 0, 0, 0, 0, 0
-  tk.alloc, tk.gc, tk.freed, tk.lua, tk.self = 0, 0, 0, 0, 0
+  tk.alloc, tk.gc, tk.freed, tk.lua, tk.self, tk.bg = 0, 0, 0, 0, 0, 0
+end
+
+-- pending hitches of a run that turned out NOT to be background: write them
+local function BgFlushPending()
+  for i = 1, bgs.npend do
+    W(bgs.pend[i])
+    bgs.pend[i] = nil
+    st.hitchCount = st.hitchCount + 1
+  end
+  bgs.npend = 0
+end
+
+-- pending hitches of a run that IS background: drop them
+local function BgDropPending()
+  for i = 1, bgs.npend do bgs.pend[i] = nil end
+  bgs.skipped = bgs.skipped + bgs.npend
+  bgs.npend = 0
+end
+
+-- Called once per frame before the hitch test; returns true while in background
+local function BgUpdate(ms, el, now)
+  if bgs.on then
+    if ms < cfg.bgMinMs then
+      bgs.on = false
+      bgs.run, bgs.runMs = 0, 0
+      Mark("bg_end", format("%.1fs, %d frames", now - bgs.since, bgs.frames))
+      return false
+    end
+    bgs.frames = bgs.frames + 1
+    tk.bg = tk.bg + el
+    bgs.total = bgs.total + el
+    return true
+  end
+  local long = ms >= cfg.bgMinMs and fLua < ms * 0.25
+  if long and bgs.run > 0 and math.abs(ms - bgs.ref) <= bgs.ref * cfg.bgTol then
+    bgs.run = bgs.run + 1
+    bgs.runMs = bgs.runMs + ms
+  else
+    -- the previous run is over and was not background: its hitches were real
+    BgFlushPending()
+    if long then bgs.run, bgs.runMs = 1, ms else bgs.run, bgs.runMs = 0, 0 end
+  end
+  bgs.ref = ms
+  if bgs.run >= cfg.bgRun then
+    bgs.on = true
+    bgs.periods = bgs.periods + 1
+    bgs.frames = bgs.run
+    bgs.since = now - bgs.runMs / 1000
+    tk.bg = tk.bg + bgs.runMs / 1000
+    bgs.total = bgs.total + bgs.runMs / 1000
+    BgDropPending()
+    Mark("bg_start", format("%.0f ms frames", ms))
+    return true
+  end
+  return false
 end
 
 local function Periodic(now)
@@ -735,16 +806,28 @@ local function OnUpdate()
     st.loading = false
   end
 
+  -- window in background (throttled frame rate): not a slow frame
+  local bg = BgUpdate(ms, el, now)
+
   -- slow frame?
-  if ms >= 33 then tk.n33 = tk.n33 + 1 end
-  if ms >= 50 then tk.n50 = tk.n50 + 1 end
-  if ms >= 100 then tk.n100 = tk.n100 + 1 end
-  if ms > tk.max then tk.max = ms end
-  if ms >= cfg.hitchMs and not st.loading then
-    st.hitchCount = st.hitchCount + 1
-    W(format("H\t%.3f\t%.1f\t%.2f\t%d\t%d\t%d\t%s\t%s\t%d",
-      now - T0, ms, fLua, gc == 1 and 0 or dmem, gc, freed, SpikeString(), EventString(),
-      st.inCombat and 1 or 0))
+  if not bg then
+    if ms >= 33 then tk.n33 = tk.n33 + 1 end
+    if ms >= 50 then tk.n50 = tk.n50 + 1 end
+    if ms >= 100 then tk.n100 = tk.n100 + 1 end
+    if ms > tk.max then tk.max = ms end
+    if ms >= cfg.hitchMs and not st.loading then
+      local line = format("H\t%.3f\t%.1f\t%.2f\t%d\t%d\t%d\t%s\t%s\t%d",
+        now - T0, ms, fLua, gc == 1 and 0 or dmem, gc, freed, SpikeString(), EventString(),
+        st.inCombat and 1 or 0)
+      if bgs.run > 0 then
+        -- part of a run of long regular frames: wait to know if it is background
+        bgs.npend = bgs.npend + 1
+        bgs.pend[bgs.npend] = line
+      else
+        st.hitchCount = st.hitchCount + 1
+        W(line)
+      end
+    end
   end
   tk.lua = tk.lua + fLua
   fLua = 0
@@ -896,6 +979,7 @@ local function OnEvent()
     end
 
   elseif ev == "PLAYER_LOGOUT" then
+    BgFlushPending()
     Mark("logout", "")
     DumpProfile()
     Flush()
@@ -1029,6 +1113,8 @@ SlashCmdList["PERFLOG"] = function(msg)
       cfg.enabled and "on" or "off", PROF and "on" or "off", nextId, hookedTypes, CLOCK_NAME))
     Print(format("  %d lines / %.0f KB written, %d hitches, Lua memory %.1f MB (GC at %.1f MB)",
       linesWritten, bytesWritten / 1024, st.hitchCount, mem / 1024, (thr or 0) / 1024))
+    Print(format("  window in background: %d time(s), %.0fs in total, %d throttled frames not counted as hitches%s",
+      bgs.periods, bgs.total, bgs.skipped, bgs.on and " (in background now)" or ""))
     Print("|cffaaaaaaCommands: /perflog mark <text> | top | flush | on | off | profile [on|off] | hitch <ms> | window <s> | gc|r")
   else
     Print("unknown command. /perflog for help.")

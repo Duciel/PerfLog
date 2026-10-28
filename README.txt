@@ -37,6 +37,12 @@ WHAT IS MEASURED
 - How often each event fires and how many handlers it wakes up.
 - Markers: combat, zone changes, loading screens, group size.
 - Header: loaded addons, graphics and nampower CVars, mod versions.
+- Game window in background: WoW throttles itself to ~4 FPS when it is not the
+  active window. These throttled frames are recognised (3+ frames of 150 ms or
+  more in a row, all about the same length, with almost no Lua time), are not
+  logged as hitches, and the viewer leaves those periods out of its figures
+  (shown as grey bands on the timeline). Logs from older versions are
+  cleaned up the same way by the viewer.
 
 NOTES
 - The log is appended to disk every 10 seconds with WriteCustomFile.

@@ -10,7 +10,7 @@
   --page: #f9f9f7; --surface: #fcfcfb; --surface-2: #f2f1ed;
   --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781; --grid: #e1e0d9; --line: #d6d5cd;
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #6250d6;
-  --band: rgba(235,104,52,0.09);
+  --band: rgba(235,104,52,0.09); --bgband: rgba(137,135,129,0.16);
   --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b; --info: #2a78d6;
   --sel: rgba(42,120,214,0.14);
 }
@@ -20,7 +20,7 @@
     --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
     --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781; --grid: #2c2c2a; --line: #3a3a37;
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #9085e9;
-    --band: rgba(217,89,38,0.13); --info: #3987e5; --sel: rgba(57,135,229,0.2);
+    --band: rgba(217,89,38,0.13); --info: #3987e5; --sel: rgba(57,135,229,0.2); --bgband: rgba(137,135,129,0.2);
   }
 }
 :root[data-theme="dark"] {
@@ -28,7 +28,7 @@
   --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
   --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781; --grid: #2c2c2a; --line: #3a3a37;
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #9085e9;
-  --band: rgba(217,89,38,0.13); --info: #3987e5; --sel: rgba(57,135,229,0.2);
+  --band: rgba(217,89,38,0.13); --info: #3987e5; --sel: rgba(57,135,229,0.2); --bgband: rgba(137,135,129,0.2);
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
@@ -141,6 +141,7 @@ details summary { cursor: pointer; color: var(--ink-2); }
       <h2>Timeline</h2>
       <div>
         <span class="legendline"><i style="background:var(--band)"></i>in combat</span>
+        <span class="legendline"><i style="background:var(--bgband)"></i>game window in background (ignored)</span>
         <span class="legendline"><i style="background:var(--critical);width:3px;height:10px"></i>hitch</span>
         <span class="legendline"><i style="border-left:1px dashed var(--muted);height:12px;width:1px"></i>marker (zone, loading screen, /perflog mark)</span>
       </div>
@@ -262,7 +263,7 @@ function parseLog(text, fileName) {
       case "A": A.push({ name: f[1], enabled: f[2] === "1", loaded: f[3] === "1" }); break;
       case "C": C[f[1]] = f[2]; break;
       case "R": R[f[1]] = { id: +f[1], owner: f[2], script: f[3], name: f[4], src: f[5] }; break;
-      case "T": T.push({ t: +f[1], dur: +f[2], frames: +f[3], max: +f[4], n33: +f[5], n50: +f[6], n100: +f[7], lat: +f[8], mem: +f[9], thr: +f[10], alloc: +f[11], gc: +f[12], freed: +f[13], lua: +f[14], self: +f[15], combat: f[16] === "1", loading: f[17] === "1", group: +f[18], children: +f[19] }); break;
+      case "T": T.push({ t: +f[1], dur: +f[2], frames: +f[3], max: +f[4], n33: +f[5], n50: +f[6], n100: +f[7], lat: +f[8], mem: +f[9], thr: +f[10], alloc: +f[11], gc: +f[12], freed: +f[13], lua: +f[14], self: +f[15], combat: f[16] === "1", loading: f[17] === "1", group: +f[18], children: +f[19], bgSec: f[20] != null && f[20] !== "" ? +f[20] : null }); break;
       case "H": H.push({ t: +f[1], ms: +f[2], lua: +f[3], alloc: +f[4], gc: f[5] === "1", freed: +f[6],
         spikes: f[7] && f[7] !== "-" ? f[7].split(";").map(s => { const p = s.split("|"); return { id: p[0], key: p[1], ms: +p[2] }; }) : [],
         events: f[8] && f[8] !== "-" ? f[8].split(";").map(s => { const p = s.split("|"); return { ev: p[0], n: +p[1] }; }) : [],
@@ -274,7 +275,61 @@ function parseLog(text, fileName) {
     }
   }
   T.sort((a, b) => a.t - b.t);
-  return { name: sessionName, S, A, C, R, T, H, P, E, M, F };
+  H.sort((a, b) => a.t - b.t);
+  const bg = markBackground(T, H, M);
+  return { name: sessionName, S, A, C, R, T, H, P, E, M, F, bg };
+}
+
+// ------------------------------------------------------------------ background window
+// When WoW is not the active window it throttles itself to a fixed low frame rate
+// (~4 FPS, ~260 ms frames). Those frames are not hitches.
+// PerfLog >= 1.3.0 detects it in game (bgSec in T lines, bg_start/bg_end markers, no H line).
+// For older logs, the runs are rebuilt from the H lines: >= 3 consecutive frames >= 150 ms,
+// each within 15% of the previous one, with almost no Lua time.
+const BG = { minMs: 150, run: 3, tol: 0.15 };
+function markBackground(T, H, M) {
+  const hasField = T.some(r => r.bgSec != null);
+  const iv = [];
+  if (!hasField) {
+    let run = [], on = false;
+    const close = () => { if (on && run.length) iv.push([run[0].t - run[0].ms / 1000, run[run.length - 1].t]); run = []; on = false; };
+    for (const h of H) {
+      const long = h.ms >= BG.minMs && h.lua < h.ms * 0.25;
+      const prev = run[run.length - 1];
+      // consecutive frame: starts where the previous one ended (small tolerance)
+      const contiguous = prev && Math.abs((h.t - h.ms / 1000) - prev.t) < 0.05 + 0.25 * h.ms / 1000;
+      if (long && contiguous && (on || Math.abs(h.ms - prev.ms) <= prev.ms * BG.tol)) {
+        run.push(h);
+        if (run.length >= BG.run) on = true;
+      } else {
+        close();
+        if (long) run = [h];
+      }
+    }
+    close();
+    for (const h of H) h.bg = false;
+    let j = 0;
+    for (const h of H) {
+      while (j < iv.length && iv[j][1] < h.t - 1e-6) j++;
+      if (j < iv.length && h.t >= iv[j][0] - 1e-6 && h.t <= iv[j][1] + 1e-6) h.bg = true;
+    }
+    let k = 0;
+    for (const r of T) {
+      const a = r.t - r.dur, b = r.t;
+      while (k < iv.length && iv[k][1] < a) k++;
+      let ov = 0;
+      for (let q = k; q < iv.length && iv[q][0] < b; q++) ov += Math.max(0, Math.min(b, iv[q][1]) - Math.max(a, iv[q][0]));
+      r.bgSec = ov;
+    }
+  } else {
+    for (const r of T) if (r.bgSec == null) r.bgSec = 0;
+    for (const h of H) h.bg = false;
+  }
+  for (const r of T) r.bg = r.dur > 0 && r.bgSec >= 0.5 * r.dur;
+  const skipped = H.filter(h => h.bg).length;
+  const seconds = T.reduce((a, r) => a + (r.bgSec || 0), 0);
+  const periods = hasField ? M.filter(m => m.type === "bg_start").length : iv.length;
+  return { inferred: !hasField, seconds, periods, skipped };
 }
 
 // ------------------------------------------------------------------ state
@@ -300,8 +355,8 @@ function inRange(t) { return !state.range || (t >= state.range[0] && t <= state.
 function modeOK(combat) { return state.mode === "all" || (state.mode === "combat" ? combat : !combat); }
 
 function filtered(sess) {
-  const T = sess.T.filter(r => !r.loading && inRange(r.t) && modeOK(r.combat));
-  const H = sess.H.filter(r => inRange(r.t) && modeOK(r.combat));
+  const T = sess.T.filter(r => !r.loading && !r.bg && inRange(r.t) && modeOK(r.combat));
+  const H = sess.H.filter(r => !r.bg && inRange(r.t) && modeOK(r.combat));
   // profile windows: classify each window as combat / out of combat from its T seconds
   const winMap = new Map();
   for (const p of sess.P) if (!winMap.has(p.t)) winMap.set(p.t, p.win);
@@ -489,7 +544,7 @@ function diagnose(sess, f, k, agg) {
   }
 
   // 5. combat vs out of combat
-  const Tall = sess.T.filter(r => !r.loading && inRange(r.t));
+  const Tall = sess.T.filter(r => !r.loading && !r.bg && inRange(r.t));
   const fps = (rows) => { const d = rows.reduce((a, r) => a + r.dur, 0); return d ? rows.reduce((a, r) => a + r.frames, 0) / d : NaN; };
   const luaF = (rows) => { const d = rows.reduce((a, r) => a + r.dur, 0); return d ? rows.reduce((a, r) => a + r.lua, 0) / (d * 1000) : NaN; };
   const tc = Tall.filter(r => r.combat), tn = Tall.filter(r => !r.combat);
@@ -538,6 +593,14 @@ function diagnose(sess, f, k, agg) {
   if (k.selfFrac > 0.02) add("warning", `PerfLog itself uses ${pct(k.selfFrac, 1)} of the time`, "For lighter measuring: /perflog profile off (keeps FPS, hitches, memory, GC).");
   if (S.profile === "0") add("info", "Handler profiling was off in this session", "The addon/handler tables are empty. Turn it back on with /perflog profile on.");
 
+  // 10. background window
+  if (sess.bg && sess.bg.seconds >= 1) {
+    add("info", `Game window in background for ${fmtDur(sess.bg.seconds)} (${fmt(sess.bg.periods)} time(s)) — ignored`,
+      `WoW throttles itself to ~4 FPS when it is not the active window. These periods are left out of FPS, hitches and frame-time figures` +
+      (sess.bg.skipped ? `; ${fmt(sess.bg.skipped)} throttled frame(s) were not counted as hitches` : "") +
+      (sess.bg.inferred ? ". This log predates PerfLog 1.3.0, so the periods were rebuilt from its hitch lines." : "."));
+  }
+
   const order = { critical: 0, serious: 1, warning: 2, info: 3, good: 4 };
   out.sort((a, b) => order[a.sev] - order[b.sev]);
   return out;
@@ -569,15 +632,24 @@ function renderCharts(sess) {
   if (!T.length) { box.append(el("p", { class: "muted" }, "No timeline data.")); return; }
   const x0 = state.range ? state.range[0] : T[0].t - T[0].dur;
   const x1 = state.range ? state.range[1] : T[T.length - 1].t;
-  const rows = T.filter(r => r.t >= x0 && r.t <= x1);
+  const rows = T.filter(r => r.t >= x0 && r.t <= x1 && !r.bg);
+  // background bands
+  const bgBands = []; let gs = null, ge = null;
+  for (const r of T) {
+    if (r.t < x0 || r.t - r.dur > x1) continue;
+    if (r.bg) { if (gs == null) gs = r.t - r.dur; ge = r.t; }
+    else if (gs != null) { bgBands.push([gs, ge]); gs = null; }
+  }
+  if (gs != null) bgBands.push([gs, ge]);
+  if (!rows.length) { box.append(el("p", { class: "muted" }, "Only background-window time in this range.")); return; }
   const W = Math.max(320, box.clientWidth || 900), padL = 52, padR = 12, padT = 6, padB = 18;
   const X = (t) => padL + (t - x0) / Math.max(1e-9, x1 - x0) * (W - padL - padR);
   // combat bands
   const bands = []; let bs = null;
   for (const r of rows) { if (r.combat && bs == null) bs = r.t - r.dur; if (!r.combat && bs != null) { bands.push([bs, r.t - r.dur]); bs = null; } }
   if (bs != null) bands.push([bs, rows[rows.length - 1].t]);
-  const marks = sess.M.filter(m => m.t >= x0 && m.t <= x1 && ["zone", "user", "loading_start", "loading_end", "group", "logout", "profile", "user_gc"].includes(m.type));
-  const hitches = sess.H.filter(h => h.t >= x0 && h.t <= x1);
+  const marks = sess.M.filter(m => m.t >= x0 && m.t <= x1 && ["zone", "user", "loading_start", "loading_end", "group", "logout", "profile", "user_gc", "bg_start", "bg_end"].includes(m.type));
+  const hitches = sess.H.filter(h => !h.bg && h.t >= x0 && h.t <= x1);
 
   chartDefs.forEach((def, ci) => {
     const H = ci === 0 ? 150 : 96;
@@ -588,6 +660,7 @@ function renderCharts(sess) {
     const Y = (v) => padT + (1 - Math.min(v, vmax) / vmax) * (H - padT - padB);
     const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, height: H, role: "img", "aria-label": def.title });
     for (const [a, b] of bands) svg.append(sv("rect", { x: X(a), y: padT, width: Math.max(1, X(b) - X(a)), height: H - padT - padB, fill: "var(--band)" }));
+    for (const [a, b] of bgBands) svg.append(sv("rect", { x: X(a), y: padT, width: Math.max(1, X(b) - X(a)), height: H - padT - padB, fill: "var(--bgband)" }));
     // grid
     for (let i = 0; i <= 2; i++) {
       const v = vmax * i / 2, y = Y(v);
@@ -614,7 +687,7 @@ function renderCharts(sess) {
     }
     // series
     let d = ""; let prevT = null;
-    rows.forEach((r, i) => { const v = def.get(r); const gap = prevT != null && r.t - prevT > 3; d += (i === 0 || gap ? "M" : "L") + X(r.t).toFixed(1) + "," + Y(v).toFixed(1); prevT = r.t; });
+    rows.forEach((r, i) => { const v = def.get(r); const gap = prevT != null && r.t - r.dur - prevT > 0.5; d += (i === 0 || gap ? "M" : "L") + X(r.t).toFixed(1) + "," + Y(v).toFixed(1); prevT = r.t; });
     svg.append(sv("path", { d, fill: "none", stroke: def.color, "stroke-width": 1.6, "stroke-linejoin": "round" }));
     if (def.key === "mem") for (const r of rows) if (r.gc > 0) svg.append(sv("circle", { cx: X(r.t), cy: Y(def.get(r)), r: 2.5, fill: def.color, stroke: "var(--surface)", "stroke-width": 1 }));
     if (ci === 0 || def.key === "max") for (const h of hitches) {
@@ -652,6 +725,7 @@ function markLabel(m) {
   switch (m.type) {
     case "zone": return m.text; case "user": return "✎ " + m.text; case "loading_start": return "loading…";
     case "loading_end": return "loaded (" + m.text + ")"; case "group": return "group: " + m.text; case "logout": return "logout";
+    case "bg_start": return "window in background"; case "bg_end": return "window active again";
     default: return m.type + " " + m.text;
   }
 }
@@ -671,7 +745,7 @@ function showCross(sess, t, ev) {
   const tip = $("#tip"); tip.replaceChildren();
   tip.append(el("div", { style: "margin-bottom:4px;color:var(--ink-2)" }, wallClock(sess, r.t) + (r.combat ? " · in combat" : "") + (r.group > 1 ? ` · group ${r.group}` : "")));
   for (const c of charts) tip.append(el("div", { class: "row" }, el("i", { class: "key", style: `background:${c.def.color}` }), el("b", null, c.def.fmt(c.def.get(r))), el("span", { class: "muted" }, c.def.key === "max" ? "worst frame" : c.def.key === "lua" ? "Lua" : c.def.key === "mem" ? "memory" : c.def.key === "lat" ? "latency" : "FPS")));
-  const hs = sess.H.filter(h => Math.abs(h.t - r.t) <= 0.6);
+  const hs = sess.H.filter(h => !h.bg && Math.abs(h.t - r.t) <= 0.6);
   for (const h of hs.slice(0, 2)) { const c = classifyHitch(h, sess.R); tip.append(el("div", { style: "margin-top:4px;color:var(--critical)" }, `Hitch ${fmt(h.ms, 0)} ms — ${c.label}`)); }
   tip.style.display = "block";
   const w = tip.offsetWidth, hgt = tip.offsetHeight;
